@@ -2,15 +2,13 @@
 
 ## Quick Setup for SiteGround Email
 
-### For Local Development
-
 Create a `.env` file in the `powerbi-backend` directory with the following content:
 
 ```env
 # Server Configuration
 PORT=3001
 
-# SMTP Email Configuration (SiteGround - Local)
+# SMTP Email Configuration (SiteGround)
 SMTP_HOST=gukm1074.siteground.biz
 SMTP_PORT=465
 SMTP_SECURE=true
@@ -24,54 +22,19 @@ SP_CLIENT_SECRET=your-service-principal-client-secret
 PBI_WORKSPACE_ID=your-power-bi-workspace-id
 ```
 
-### For Render/Cloud Deployment
-
-**⚠️ Important**: SiteGround may block connections from cloud platforms. If you encounter timeout errors, consider using SendGrid, Mailgun, or AWS SES (see `ALTERNATIVE-EMAIL-SERVICES.md`).
-
-For Render, use these settings (though SiteGround may still block):
-
-```env
-# Server Configuration
-PORT=3001
-
-# SMTP Email Configuration (SiteGround - Render/Cloud)
-SMTP_HOST=gukm1074.siteground.biz
-SMTP_PORT=587
-SMTP_SECURE=false
-SMTP_EMAIL=powerbi-admin@rspponderwijs.nl
-SMTP_PASSWORD=(@D`#l%lk^l#
-
-# Power BI Configuration
-AAD_TENANT_ID=your-azure-ad-tenant-id
-SP_CLIENT_ID=your-service-principal-client-id
-SP_CLIENT_SECRET=your-service-principal-client-secret
-PBI_WORKSPACE_ID=your-power-bi-workspace-id
-```
-
 ## SiteGround SMTP Settings
 
-### Local Development:
 - **SMTP Host**: `gukm1074.siteground.biz`
 - **SMTP Port**: `465` (SSL)
 - **SMTP Secure**: `true` (required for port 465)
 - **Email**: `powerbi-admin@rspponderwijs.nl`
 - **Password**: `(@D`#l%lk^l#`
 
-### Render/Cloud Deployment:
-- **SMTP Host**: `gukm1074.siteground.biz`
-- **SMTP Port**: `587` (TLS) - recommended for cloud platforms
-- **SMTP Secure**: `false` (TLS/STARTTLS)
-- **Email**: `powerbi-admin@rspponderwijs.nl`
-- **Password**: `(@D`#l%lk^l#`
-
 ## Important Notes
 
 1. **Port 465 requires SSL**: Make sure `SMTP_SECURE=true` when using port 465
-2. **Port 587 uses TLS**: Use `SMTP_SECURE=false` when using port 587
-3. **Cloud Deployments**: For Render/Heroku, prefer port 587 (TLS) over 465 (SSL)
-4. **SiteGround Blocking**: SiteGround may block connections from cloud platforms. If timeouts persist, use SendGrid, Mailgun, or AWS SES
-5. **Password**: The password contains special characters - make sure to copy it exactly
-6. **Security**: Never commit your `.env` file to version control
+2. **Password**: The password contains special characters - make sure to copy it exactly
+3. **Security**: Never commit your `.env` file to version control
 
 ## Testing
 
