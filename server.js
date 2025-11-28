@@ -39,7 +39,9 @@ const getSMTPPassword = () => {
   return cleanedPassword;
 };
 
-const smtpPort = Number(process.env.SMTP_PORT) || 465;
+// SMTP Configuration - Cloud-friendly settings
+// For cloud deployments (like Render), prefer port 587 (TLS) over 465 (SSL)
+const smtpPort = Number(process.env.SMTP_PORT) || (process.env.NODE_ENV === 'production' ? 587 : 465);
 const isSecure = smtpPort === 465 || process.env.SMTP_SECURE === "true";
 
 // Get credentials
@@ -56,68 +58,88 @@ if (smtpPassword) {
 }
 console.log(`   Host: ${process.env.SMTP_HOST}`);
 console.log(`   Port: ${smtpPort}`);
-console.log(`   Secure: ${isSecure}\n`);
+console.log(`   Secure: ${isSecure}`);
+console.log(`   Environment: ${process.env.NODE_ENV || 'development'}\n`);
 
-// Try different authentication methods for SiteGround
-const transporter = nodemailer.createTransport({
-  host: process.env.SMTP_HOST,
-  port: smtpPort,
-  secure: isSecure, // true for 465 (SSL), false for 587 (TLS)
-  auth: {
-    user: smtpEmail,
-    pass: smtpPassword,
-    // Try LOGIN method instead of PLAIN (some servers prefer this)
-    method: 'LOGIN',
-  },
-  // Additional options for better compatibility with SiteGround
-  tls: {
-    rejectUnauthorized: false, // Accept self-signed certificates
-  },
-  // Connection timeout
-  connectionTimeout: 20000, // 20 seconds
-  greetingTimeout: 20000,
-  // Debug mode - enable to see full SMTP conversation
-  debug: process.env.SMTP_DEBUG === "true",
-  logger: process.env.SMTP_DEBUG === "true",
-});
+// Create transporter helper function
+const createTransporter = (port, secure) => {
+  return nodemailer.createTransport({
+    host: process.env.SMTP_HOST,
+    port: port,
+    secure: secure,
+    auth: {
+      user: smtpEmail,
+      pass: smtpPassword,
+      method: 'LOGIN',
+    },
+    tls: {
+      rejectUnauthorized: false,
+      ciphers: 'SSLv3',
+    },
+    connectionTimeout: 60000,
+    greetingTimeout: 30000,
+    socketTimeout: 60000,
+    pool: true,
+    maxConnections: 1,
+    maxMessages: 3,
+    debug: process.env.SMTP_DEBUG === "true",
+    logger: process.env.SMTP_DEBUG === "true",
+  });
+};
 
-// Verify SMTP connection on startup
+// Create initial transporter with cloud-optimized settings
+let transporter = createTransporter(smtpPort, isSecure);
+
+// Verify SMTP connection on startup with fallback
 const verifySMTPConnection = async () => {
-  try {
-    // Log configuration (without password)
-    console.log("🔍 Verifying SMTP connection...");
-    console.log(`   Host: ${process.env.SMTP_HOST}`);
-    console.log(`   Port: ${process.env.SMTP_PORT}`);
-    console.log(`   Secure: ${isSecure}`);
-    console.log(`   Email: ${process.env.SMTP_EMAIL}`);
-    console.log(`   Password: ${process.env.SMTP_PASSWORD ? "***" + process.env.SMTP_PASSWORD.slice(-3) : "NOT SET"}`);
-    
-    await transporter.verify();
-    console.log("✅ SMTP server connection verified successfully");
-    return true;
-  } catch (error) {
-    console.error("❌ SMTP connection verification failed:", error.message);
-    console.error("   Error Code:", error.code);
-    console.error("   Response:", error.response);
-    
-    if (error.code === "EAUTH" || error.responseCode === 535 || error.message?.includes?.("535")) {
-      console.error("\n⚠️  Authentication failed (535). Common issues:");
-      console.error("   1. Check SMTP_EMAIL and SMTP_PASSWORD are correct in .env");
-      console.error("   2. For passwords with special characters, try wrapping in quotes:");
-      console.error("      SMTP_PASSWORD=\"(@D`#l%lk^l#\"");
-      console.error("   3. Verify email account credentials in SiteGround cPanel");
-      console.error("   4. Check if password has any hidden characters or spaces");
-      console.error("   5. Try using the full email as username: powerbi-admin@rspponderwijs.nl");
-    } else if (error.code === "ECONNECTION") {
-      console.error("\n⚠️  Connection failed. Check:");
-      console.error("   1. SMTP_HOST is correct: gukm1074.siteground.biz");
-      console.error("   2. SMTP_PORT is correct: 465");
-      console.error("   3. SMTP_SECURE is true for port 465");
-      console.error("   4. Firewall/network allows SMTP connections on port 465");
+  const portsToTry = [
+    { port: smtpPort, secure: isSecure },
+    // Fallback: Try port 587 (TLS) if 465 fails (common for cloud deployments)
+    { port: 587, secure: false },
+    // Fallback: Try port 465 (SSL) if 587 fails
+    { port: 465, secure: true },
+  ];
+
+  // Remove duplicates
+  const uniquePorts = portsToTry.filter((p, index, self) => 
+    index === self.findIndex(t => t.port === p.port && t.secure === p.secure)
+  );
+
+  for (const config of uniquePorts) {
+    try {
+      console.log(`🔍 Verifying SMTP connection on port ${config.port} (secure: ${config.secure})...`);
+      const testTransporter = createTransporter(config.port, config.secure);
+      await testTransporter.verify();
+      console.log(`✅ SMTP server connection verified successfully on port ${config.port}`);
+      
+      // Update the main transporter if we found a working port
+      if (config.port !== smtpPort || config.secure !== isSecure) {
+        console.log(`⚠️  Using fallback port ${config.port} instead of configured port ${smtpPort}`);
+        // Note: We'll recreate transporter in send-otp if needed
+      }
+      
+      return { success: true, port: config.port, secure: config.secure };
+    } catch (error) {
+      console.error(`❌ Port ${config.port} failed:`, error.message);
+      if (config === uniquePorts[uniquePorts.length - 1]) {
+        // Last attempt failed
+        console.error("\n⚠️  All SMTP port attempts failed. Common issues:");
+        console.error("   1. Check SMTP_HOST is correct");
+        console.error("   2. Verify SMTP_EMAIL and SMTP_PASSWORD are correct");
+        console.error("   3. For cloud deployments (Render, Heroku, etc.), try port 587 (TLS)");
+        console.error("   4. Check if SMTP server allows connections from cloud IPs");
+        console.error("   5. Verify firewall/network allows SMTP connections");
+        
+        if (error.code === "ETIMEDOUT" || error.code === "ECONNECTION") {
+          console.error("\n💡 TIP: For Render deployments, set in environment variables:");
+          console.error("   SMTP_PORT=587");
+          console.error("   SMTP_SECURE=false");
+        }
+      }
     }
-    
-    return false;
   }
+  
+  return { success: false, port: null, secure: null };
 };
 
 // Environment variables
@@ -230,24 +252,70 @@ app.post("/api/send-otp", async (req, res) => {
     expiresAt: Date.now() + 5 * 60 * 1000,
   };
 
-  try {
-    console.log(`📧 Sending OTP to: ${normalizedEmail}`);
-    
-    await transporter.sendMail({
-      from: process.env.SMTP_EMAIL,
-      to: normalizedEmail,
-      subject: "Your Verification Code",
-      html: `
-        <h2>Your OTP Code</h2>
-        <p>Your verification code is:</p>
-        <h1>${otp}</h1>
-        <p>This code expires in 5 minutes.</p>
-      `,
-    });
+  // Try sending with retry logic for different ports
+  const portsToTry = [
+    { port: smtpPort, secure: isSecure },
+    { port: 587, secure: false },
+    { port: 465, secure: true },
+  ];
 
-    console.log(`✅ OTP sent successfully to: ${normalizedEmail}`);
+  // Remove duplicates
+  const uniquePorts = portsToTry.filter((p, index, self) => 
+    index === self.findIndex(t => t.port === p.port && t.secure === p.secure)
+  );
+
+  let lastError = null;
+  let emailSent = false;
+
+  for (const config of uniquePorts) {
+    try {
+      console.log(`📧 Sending OTP to: ${normalizedEmail} (using port ${config.port})`);
+      
+      // Create transporter for this attempt
+      const attemptTransporter = createTransporter(config.port, config.secure);
+      
+      await attemptTransporter.sendMail({
+        from: process.env.SMTP_EMAIL,
+        to: normalizedEmail,
+        subject: "Your Verification Code",
+        html: `
+          <h2>Your OTP Code</h2>
+          <p>Your verification code is:</p>
+          <h1>${otp}</h1>
+          <p>This code expires in 5 minutes.</p>
+        `,
+      });
+
+      console.log(`✅ OTP sent successfully to: ${normalizedEmail} via port ${config.port}`);
+      
+      // Update main transporter if we used a different port
+      if (config.port !== smtpPort || config.secure !== isSecure) {
+        transporter = attemptTransporter;
+        console.log(`ℹ️  Updated transporter to use port ${config.port}`);
+      }
+      
+      emailSent = true;
+      break; // Success, exit loop
+    } catch (err) {
+      lastError = err;
+      console.error(`❌ Failed to send via port ${config.port}:`, err.message);
+      
+      // If this is not the last attempt, continue to next port
+      if (config !== uniquePorts[uniquePorts.length - 1]) {
+        console.log(`🔄 Retrying with different port...`);
+        continue;
+      }
+    }
+  }
+
+  if (emailSent) {
     res.json({ success: true, message: "OTP sent to email" });
-  } catch (err) {
+    return;
+  }
+
+  // All attempts failed
+  if (lastError) {
+    const err = lastError;
     console.error("\n❌ ERROR sending OTP:");
     console.error("   Email:", normalizedEmail);
     console.error("   Error:", err.message);
@@ -280,7 +348,8 @@ app.post("/api/send-otp", async (req, res) => {
     } else if (err.code === "ECONNECTION") {
       errorMessage = "Could not connect to SMTP server. Check SMTP_HOST and SMTP_PORT in your .env file.";
     } else if (err.code === "ETIMEDOUT") {
-      errorMessage = "SMTP connection timed out. Check your network connection and SMTP settings.";
+      statusCode = 503;
+      errorMessage = "SMTP connection timed out. This is common on cloud platforms like Render. Try setting SMTP_PORT=587 and SMTP_SECURE=false in your environment variables.";
     } else if (err.code === "EENVELOPE") {
       errorMessage = "Invalid email address format.";
     } else if (err.message?.includes?.("535") || err.message?.includes?.("Invalid login")) {
@@ -289,6 +358,8 @@ app.post("/api/send-otp", async (req, res) => {
     }
     
     res.status(statusCode).json({ success: false, error: errorMessage });
+  } else {
+    res.status(500).json({ success: false, error: "Failed to send OTP. Unknown error." });
   }
 });
 
@@ -608,7 +679,18 @@ const startServer = async () => {
     validateEnvVars();
 
     // Verify SMTP connection (non-blocking)
-    verifySMTPConnection().catch(() => {
+    verifySMTPConnection().then((result) => {
+      if (result.success) {
+        // Update transporter if verification found a better port
+        if (result.port !== smtpPort || result.secure !== isSecure) {
+          transporter = createTransporter(result.port, result.secure);
+          console.log(`✅ Updated transporter to use verified port ${result.port}`);
+        }
+      } else {
+        console.warn("⚠️  SMTP verification failed, but server will continue. Emails may not work.");
+        console.warn("💡 For Render deployments, try setting: SMTP_PORT=587 and SMTP_SECURE=false");
+      }
+    }).catch(() => {
       console.warn("⚠️  SMTP verification failed, but server will continue. Emails may not work.");
     });
 
