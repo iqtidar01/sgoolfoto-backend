@@ -37,7 +37,9 @@ const SMTP_EMAIL = readEnvNoQuotes("SMTP_EMAIL", { trimStartEnd: true });
 const SMTP_PASSWORD = readEnvNoQuotes("SMTP_PASSWORD"); // DON'T trim; spaces may be valid
 
 if (!SMTP_HOST || !SMTP_EMAIL || !SMTP_PASSWORD) {
-  console.warn("⚠️  SMTP env missing. Please set SMTP_HOST/SMTP_EMAIL/SMTP_PASSWORD.");
+  console.warn(
+    "⚠️  SMTP env missing. Please set SMTP_HOST/SMTP_EMAIL/SMTP_PASSWORD."
+  );
 }
 
 const transporter = nodemailer.createTransport({
@@ -86,12 +88,8 @@ async function sendEmail({ to, subject, html }) {
 }
 
 // ---------- Power BI (Service Principal) ----------
-const {
-  AAD_TENANT_ID,
-  SP_CLIENT_ID,
-  SP_CLIENT_SECRET,
-  PBI_WORKSPACE_ID,
-} = process.env;
+const { AAD_TENANT_ID, SP_CLIENT_ID, SP_CLIENT_SECRET, PBI_WORKSPACE_ID } =
+  process.env;
 
 const RLS_ENABLED_DATASETS = [
   "a48db15f-a2b5-41a9-a46d-67991ae69283",
@@ -114,7 +112,9 @@ function validateEnvVars() {
     .map(([k]) => k);
 
   if (missing.length > 0) {
-    throw new Error(`Missing required environment variables: ${missing.join(", ")}`);
+    throw new Error(
+      `Missing required environment variables: ${missing.join(", ")}`
+    );
   }
 }
 
@@ -136,7 +136,9 @@ async function getAccessToken() {
   } catch (error) {
     const status = error.response?.status;
     const details = error.response?.data?.error_description || error.message;
-    throw new Error(`Failed to obtain access token (status ${status || "n/a"}): ${details}`);
+    throw new Error(
+      `Failed to obtain access token (status ${status || "n/a"}): ${details}`
+    );
   }
 }
 
@@ -152,12 +154,19 @@ async function getReportsInWorkspace(accessToken) {
     return response.data.value;
   } catch (error) {
     throw new Error(
-      `Failed to fetch reports: ${error.response?.data?.error?.message || error.message}`
+      `Failed to fetch reports: ${
+        error.response?.data?.error?.message || error.message
+      }`
     );
   }
 }
 
-async function getEmbedToken(accessToken, reportId, datasetIds, userIdentity = null) {
+async function getEmbedToken(
+  accessToken,
+  reportId,
+  datasetIds,
+  userIdentity = null
+) {
   const url = `https://api.powerbi.com/v1.0/myorg/GenerateToken`;
 
   const body = {
@@ -166,7 +175,9 @@ async function getEmbedToken(accessToken, reportId, datasetIds, userIdentity = n
   };
 
   if (userIdentity && userIdentity.username) {
-    const rlsDatasets = datasetIds.filter((id) => RLS_ENABLED_DATASETS.includes(id));
+    const rlsDatasets = datasetIds.filter((id) =>
+      RLS_ENABLED_DATASETS.includes(id)
+    );
     if (rlsDatasets.length > 0) {
       const roles =
         userIdentity.roles && userIdentity.roles.length > 0
@@ -221,10 +232,17 @@ app.get("/api/health", (_req, res) => {
 app.get("/api/test-smtp", async (_req, res) => {
   try {
     const ok = await verifySMTPConnection();
-    if (ok) return res.json({ success: true, message: "SMTP connection verified successfully" });
+    if (ok)
+      return res.json({
+        success: true,
+        message: "SMTP connection verified successfully",
+      });
     return res
       .status(500)
-      .json({ success: false, error: "SMTP connection verification failed. Check server logs." });
+      .json({
+        success: false,
+        error: "SMTP connection verification failed. Check server logs.",
+      });
   } catch (e) {
     return res.status(500).json({ success: false, error: e.message });
   }
@@ -233,9 +251,12 @@ app.get("/api/test-smtp", async (_req, res) => {
 app.post("/api/send-otp", async (req, res) => {
   try {
     const { email } = req.body;
-    if (!email) return res.status(400).json({ success: false, error: "Email required" });
+    if (!email)
+      return res.status(400).json({ success: false, error: "Email required" });
     if (!isValidEmail(email)) {
-      return res.status(400).json({ success: false, error: "Invalid email format" });
+      return res
+        .status(400)
+        .json({ success: false, error: "Invalid email format" });
     }
     const normalizedEmail = email.toLowerCase().trim();
 
@@ -247,12 +268,12 @@ app.post("/api/send-otp", async (req, res) => {
 
     await sendEmail({
       to: normalizedEmail,
-      subject: "Your Verification Code",
+      subject: "De e-mail, kun je die ook aanpanseen?",
       html: `
-        <h2>Your OTP Code</h2>
-        <p>Your verification code is:</p>
+        <h2>Uw RSPP Verification Code</h2>
+        <p>Uw verification code voor het RSPP Dashboard:</p>
         <h1>${otp}</h1>
-        <p>This code expires in 5 minutes.</p>
+        <p>Deze code verloot over 5 minuten.</p>
       `,
     });
 
@@ -262,14 +283,20 @@ app.post("/api/send-otp", async (req, res) => {
     let statusCode = 500;
     let errorMessage = err.message || "Failed to send email";
 
-    if (err.code === "EAUTH" || err.responseCode === 535 || /(^|[^0-9])535([^0-9]|$)/.test(err.message)) {
+    if (
+      err.code === "EAUTH" ||
+      err.responseCode === 535 ||
+      /(^|[^0-9])535([^0-9]|$)/.test(err.message)
+    ) {
       statusCode = 401;
       errorMessage =
         "SMTP authentication failed (535). Verify SMTP_EMAIL/SMTP_PASSWORD and remove any quotes in env.";
     } else if (err.code === "ECONNECTION") {
-      errorMessage = "Could not connect to SMTP server. Check SMTP_HOST/SMTP_PORT.";
+      errorMessage =
+        "Could not connect to SMTP server. Check SMTP_HOST/SMTP_PORT.";
     } else if (err.code === "ETIMEDOUT" || /timed out/i.test(err.message)) {
-      errorMessage = "SMTP connection timed out. Check network and SMTP settings.";
+      errorMessage =
+        "SMTP connection timed out. Check network and SMTP settings.";
     } else if (err.code === "EENVELOPE") {
       errorMessage = "Invalid email address format.";
     }
@@ -281,11 +308,16 @@ app.post("/api/send-otp", async (req, res) => {
 app.post("/api/verify-otp", (req, res) => {
   const { email, otp } = req.body;
   if (!email || !otp) {
-    return res.status(400).json({ success: false, error: "Email and OTP are required" });
+    return res
+      .status(400)
+      .json({ success: false, error: "Email and OTP are required" });
   }
   const normalizedEmail = email.toLowerCase().trim();
   const record = otpStore[normalizedEmail];
-  if (!record) return res.status(400).json({ success: false, error: "No OTP found for this email" });
+  if (!record)
+    return res
+      .status(400)
+      .json({ success: false, error: "No OTP found for this email" });
 
   if (Date.now() > record.expiresAt) {
     delete otpStore[normalizedEmail];
@@ -302,7 +334,9 @@ app.post("/api/reports", async (req, res) => {
   try {
     const { userIdentity } = req.body;
     if (!userIdentity || !userIdentity.email) {
-      return res.status(400).json({ success: false, error: "User identity is required" });
+      return res
+        .status(400)
+        .json({ success: false, error: "User identity is required" });
     }
     const accessToken = await getAccessToken();
     const allReports = await getReportsInWorkspace(accessToken);
@@ -331,7 +365,9 @@ app.post("/api/embed-token", async (req, res) => {
   try {
     const { reportId, datasetId, userIdentity, bypassRLS } = req.body;
     if (!reportId || !datasetId) {
-      return res.status(400).json({ success: false, error: "reportId and datasetId are required" });
+      return res
+        .status(400)
+        .json({ success: false, error: "reportId and datasetId are required" });
     }
     const accessToken = await getAccessToken();
     const token = await getEmbedToken(
@@ -360,9 +396,17 @@ app.post("/api/embed-config/:reportId", async (req, res) => {
     const accessToken = await getAccessToken();
     const reports = await getReportsInWorkspace(accessToken);
     const report = reports.find((r) => r.id === reportId);
-    if (!report) return res.status(404).json({ success: false, error: "Report not found" });
+    if (!report)
+      return res
+        .status(404)
+        .json({ success: false, error: "Report not found" });
 
-    const token = await getEmbedToken(accessToken, report.id, [report.datasetId], userIdentity);
+    const token = await getEmbedToken(
+      accessToken,
+      report.id,
+      [report.datasetId],
+      userIdentity
+    );
 
     res.json({
       success: true,
@@ -400,4 +444,3 @@ async function startServer() {
 }
 
 startServer();
-
