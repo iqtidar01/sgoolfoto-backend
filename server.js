@@ -270,10 +270,10 @@ app.post("/api/send-otp", async (req, res) => {
       to: normalizedEmail,
       subject: "De e-mail, kun je die ook aanpanseen?",
       html: `
-        <h2>Uw RSPP Verification Code</h2>
-        <p>Uw verification code voor het RSPP Dashboard:</p>
+        <h2>Uw RSPP Verificatie Code</h2>
+        <p>Uw Verificatie code voor het RSPP Dashboard:</p>
         <h1>${otp}</h1>
-        <p>Deze code verloot over 5 minuten.</p>
+        <p>Deze code verloopt over 5 minuten.</p>
       `,
     });
 
