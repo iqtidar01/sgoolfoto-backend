@@ -25,3 +25,7 @@ dist-ssr
 
 pnpm-lock.yaml
 .env
+ENV-SETUP.md
+SMTP-SETUP-GUIDE.md
+SITEGROUND-TROUBLESHOOTING.md
+RLS-GUIDE.md

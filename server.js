@@ -3,6 +3,10 @@ const express = require("express");
 const cors = require("cors");
 const axios = require("axios");
 const nodemailer = require("nodemailer");
+const fs = require("fs");
+const path = require("path");
+const csv = require("csv-parser");
+const createCsvWriter = require("csv-writer").createObjectCsvWriter;
 
 const app = express();
 const PORT = Number(process.env.PORT) || 3001;
@@ -13,6 +17,69 @@ app.use(express.json());
 
 // In-memory OTP store (use Redis if you scale to multiple instances)
 const otpStore = {};
+
+// CSV file path
+const CSV_FILE_PATH = path.join(__dirname, "emails.csv");
+
+// ---------- CSV Helper Functions ----------
+
+// Initialize CSV file if it doesn't exist
+function initializeCsvFile() {
+  if (!fs.existsSync(CSV_FILE_PATH)) {
+    // Create empty CSV with just headers
+    const headers = "id,email,createdAt,updatedAt\n";
+    fs.writeFileSync(CSV_FILE_PATH, headers);
+  }
+}
+
+// Read emails from CSV file
+async function readEmailsFromCsv() {
+  return new Promise((resolve, reject) => {
+    const emails = [];
+    
+    if (!fs.existsSync(CSV_FILE_PATH)) {
+      resolve([]);
+      return;
+    }
+
+    fs.createReadStream(CSV_FILE_PATH)
+      .pipe(csv())
+      .on("data", (row) => {
+        emails.push({
+          id: parseInt(row.id),
+          email: row.email,
+          createdAt: row.createdAt,
+          updatedAt: row.updatedAt,
+        });
+      })
+      .on("end", () => {
+        resolve(emails);
+      })
+      .on("error", (error) => {
+        reject(error);
+      });
+  });
+}
+
+// Write emails to CSV file
+async function writeEmailsToCsv(emails) {
+  const csvWriter = createCsvWriter({
+    path: CSV_FILE_PATH,
+    header: [
+      { id: "id", title: "id" },
+      { id: "email", title: "email" },
+      { id: "createdAt", title: "createdAt" },
+      { id: "updatedAt", title: "updatedAt" },
+    ],
+  });
+
+  try {
+    await csvWriter.writeRecords(emails);
+    return true;
+  } catch (error) {
+    throw error;
+  }
+}
 
 // ---------- Helpers ----------
 function readEnvNoQuotes(key, { trimStartEnd = false } = {}) {
@@ -37,9 +104,7 @@ const SMTP_EMAIL = readEnvNoQuotes("SMTP_EMAIL", { trimStartEnd: true });
 const SMTP_PASSWORD = readEnvNoQuotes("SMTP_PASSWORD"); // DON'T trim; spaces may be valid
 
 if (!SMTP_HOST || !SMTP_EMAIL || !SMTP_PASSWORD) {
-  console.warn(
-    "⚠️  SMTP env missing. Please set SMTP_HOST/SMTP_EMAIL/SMTP_PASSWORD."
-  );
+  // SMTP env missing
 }
 
 const transporter = nodemailer.createTransport({
@@ -68,11 +133,6 @@ async function verifySMTPConnection() {
     console.log("✅ SMTP server connection verified");
     return true;
   } catch (error) {
-    console.error("❌ SMTP verification failed", {
-      code: error.code,
-      responseCode: error.responseCode,
-      message: error.message,
-    });
     return false;
   }
 }
@@ -178,6 +238,7 @@ async function getEmbedToken(
     const rlsDatasets = datasetIds.filter((id) =>
       RLS_ENABLED_DATASETS.includes(id)
     );
+    
     if (rlsDatasets.length > 0) {
       const roles =
         userIdentity.roles && userIdentity.roles.length > 0
@@ -201,6 +262,7 @@ async function getEmbedToken(
         "Content-Type": "application/json",
       },
     });
+    
     return response.data;
   } catch (error) {
     const msg = error.response?.data?.error?.message || error.message;
@@ -260,6 +322,19 @@ app.post("/api/send-otp", async (req, res) => {
     }
     const normalizedEmail = email.toLowerCase().trim();
 
+    // CRUCIAL: Read emails from CSV file to check authorization
+    const authorizedEmails = await readEmailsFromCsv();
+
+    // Check if email exists in authorized email list from CSV
+    const isAuthorized = authorizedEmails.find(e => e.email === normalizedEmail);
+
+    if (!isAuthorized) {
+      return res.status(403).json({ 
+        success: false, 
+        error: "Dit e-mailadres is niet geautoriseerd. Neem contact op met de beheerder om uw e-mailadres aan het systeem toe te voegen."
+      });
+    }
+
     const otp = Math.floor(100000 + Math.random() * 900000).toString();
     otpStore[normalizedEmail] = {
       otp,
@@ -268,9 +343,8 @@ app.post("/api/send-otp", async (req, res) => {
 
     await sendEmail({
       to: normalizedEmail,
-      subject: "De e-mail, kun je die ook aanpanseen?",
+      subject: "Uw Verificatie code voor RSPP",
       html: `
-        <h2>Uw RSPP Verificatie Code</h2>
         <p>Uw Verificatie code voor het RSPP Dashboard:</p>
         <h1>${otp}</h1>
         <p>Deze code verloopt over 5 minuten.</p>
@@ -330,6 +404,312 @@ app.post("/api/verify-otp", (req, res) => {
   res.json({ success: true, message: "OTP Verified" });
 });
 
+app.post("/api/admin/login", (req, res) => {
+  try {
+    const { email, password } = req.body;
+    
+    // Validate required fields
+    if (!email || !password) {
+      return res.status(400).json({ 
+        success: false, 
+        error: "Email and password are required" 
+      });
+    }
+
+    // Static admin credentials
+    const ADMIN_EMAIL = "info@rspp.com";
+    const ADMIN_PASSWORD = "info@rspp.com";
+
+    // Normalize email for comparison
+    const normalizedEmail = email.toLowerCase().trim();
+
+    // Check credentials
+    if (normalizedEmail === ADMIN_EMAIL && password === ADMIN_PASSWORD) {
+      return res.json({ 
+        success: true, 
+        message: "Admin login successful",
+        user: {
+          email: ADMIN_EMAIL,
+          role: "admin"
+        }
+      });
+    }
+
+    // Invalid credentials
+    return res.status(401).json({ 
+      success: false, 
+      error: "Invalid email or password" 
+    });
+  } catch (err) {
+    return res.status(500).json({ 
+      success: false, 
+      error: "An error occurred during login" 
+    });
+  }
+});
+
+// ---------- Email Management APIs ----------
+
+// Helper function to add serial numbers to emails
+function addSerialNumbers(emails) {
+  return emails.map((email, index) => ({
+    ...email,
+    serialNumber: index + 1
+  }));
+}
+
+// Create a new email
+app.post("/api/admin/emails", async (req, res) => {
+  try {
+    const { email } = req.body;
+    
+    // Validate required fields
+    if (!email) {
+      return res.status(400).json({ 
+        success: false, 
+        error: "Email is required" 
+      });
+    }
+
+    // Validate email format
+    if (!isValidEmail(email)) {
+      return res.status(400).json({ 
+        success: false, 
+        error: "Invalid email format" 
+      });
+    }
+
+    // Read existing emails from CSV
+    const emails = await readEmailsFromCsv();
+
+    // Check if email already exists
+    const normalizedEmail = email.toLowerCase().trim();
+    const existingEmail = emails.find(e => e.email === normalizedEmail);
+    if (existingEmail) {
+      return res.status(409).json({ 
+        success: false, 
+        error: "Email already exists" 
+      });
+    }
+
+    // Create new email entry with unique ID using Date.now()
+    const newEmail = {
+      id: Date.now(),
+      email: normalizedEmail,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+
+    // Add to emails array and write to CSV
+    emails.push(newEmail);
+    await writeEmailsToCsv(emails);
+
+    // Add serial number for response
+    const emailsWithSerial = addSerialNumbers(emails);
+    const newEmailWithSerial = emailsWithSerial.find(e => e.id === newEmail.id);
+
+    return res.status(201).json({ 
+      success: true, 
+      message: "Email created successfully",
+      data: newEmailWithSerial
+    });
+  } catch (err) {
+    return res.status(500).json({ 
+      success: false, 
+      error: "An error occurred while creating email" 
+    });
+  }
+});
+
+// Get all emails
+app.get("/api/admin/emails", async (req, res) => {
+  try {
+    // Read emails from CSV
+    const emails = await readEmailsFromCsv();
+    
+    // Add serial numbers
+    const emailsWithSerial = addSerialNumbers(emails);
+    
+    return res.json({ 
+      success: true, 
+      message: "Emails retrieved successfully",
+      count: emails.length,
+      data: emailsWithSerial
+    });
+  } catch (err) {
+    return res.status(500).json({ 
+      success: false, 
+      error: "An error occurred while retrieving emails" 
+    });
+  }
+});
+
+// Get single email by ID
+app.get("/api/admin/emails/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const emailId = parseInt(id);
+
+    if (isNaN(emailId)) {
+      return res.status(400).json({ 
+        success: false, 
+        error: "Invalid email ID" 
+      });
+    }
+
+    // Read emails from CSV
+    const emails = await readEmailsFromCsv();
+    const email = emails.find(e => e.id === emailId);
+    
+    if (!email) {
+      return res.status(404).json({ 
+        success: false, 
+        error: "Email not found" 
+      });
+    }
+
+    // Add serial numbers
+    const emailsWithSerial = addSerialNumbers(emails);
+    const emailWithSerial = emailsWithSerial.find(e => e.id === emailId);
+
+    return res.json({ 
+      success: true, 
+      message: "Email retrieved successfully",
+      data: emailWithSerial
+    });
+  } catch (err) {
+    return res.status(500).json({ 
+      success: false, 
+      error: "An error occurred while retrieving email" 
+    });
+  }
+});
+
+// Update email by ID
+app.put("/api/admin/emails/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { email } = req.body;
+    const emailId = parseInt(id);
+
+    if (isNaN(emailId)) {
+      return res.status(400).json({ 
+        success: false, 
+        error: "Invalid email ID" 
+      });
+    }
+
+    // Read emails from CSV
+    const emails = await readEmailsFromCsv();
+    const emailIndex = emails.findIndex(e => e.id === emailId);
+    
+    if (emailIndex === -1) {
+      return res.status(404).json({ 
+        success: false, 
+        error: "Email not found" 
+      });
+    }
+
+    // Validate required field
+    if (!email) {
+      return res.status(400).json({ 
+        success: false, 
+        error: "Email is required" 
+      });
+    }
+
+    // Validate email format
+    if (!isValidEmail(email)) {
+      return res.status(400).json({ 
+        success: false, 
+        error: "Invalid email format" 
+      });
+    }
+
+    const normalizedEmail = email.toLowerCase().trim();
+    
+    // Check for duplicates
+    const duplicateEmail = emails.find(
+      e => e.email === normalizedEmail && e.id !== emailId
+    );
+    
+    if (duplicateEmail) {
+      return res.status(409).json({ 
+        success: false, 
+        error: "Email already exists" 
+      });
+    }
+
+    // Update email
+    emails[emailIndex].email = normalizedEmail;
+    emails[emailIndex].updatedAt = new Date().toISOString();
+
+    // Write updated emails to CSV
+    await writeEmailsToCsv(emails);
+
+    // Add serial numbers for response
+    const emailsWithSerial = addSerialNumbers(emails);
+    const updatedEmail = emailsWithSerial.find(e => e.id === emailId);
+
+    return res.json({ 
+      success: true, 
+      message: "Email updated successfully",
+      data: updatedEmail
+    });
+  } catch (err) {
+    return res.status(500).json({ 
+      success: false, 
+      error: "An error occurred while updating email" 
+    });
+  }
+});
+
+// Delete email by ID
+app.delete("/api/admin/emails/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const emailId = parseInt(id);
+
+    if (isNaN(emailId)) {
+      return res.status(400).json({ 
+        success: false, 
+        error: "Invalid email ID" 
+      });
+    }
+
+    // Read emails from CSV
+    const emails = await readEmailsFromCsv();
+    const emailIndex = emails.findIndex(e => e.id === emailId);
+    
+    if (emailIndex === -1) {
+      return res.status(404).json({ 
+        success: false, 
+        error: "Email not found" 
+      });
+    }
+
+    // Get the deleted email before removal
+    const deletedEmail = { ...emails[emailIndex], serialNumber: emailIndex + 1 };
+    
+    // Remove email from array
+    emails.splice(emailIndex, 1);
+
+    // Write updated emails to CSV
+    await writeEmailsToCsv(emails);
+
+    return res.json({ 
+      success: true, 
+      message: "Email deleted successfully",
+      data: deletedEmail
+    });
+  } catch (err) {
+    return res.status(500).json({ 
+      success: false, 
+      error: "An error occurred while deleting email" 
+    });
+  }
+});
+
 app.post("/api/reports", async (req, res) => {
   try {
     const { userIdentity } = req.body;
@@ -369,7 +749,21 @@ app.post("/api/embed-token", async (req, res) => {
         .status(400)
         .json({ success: false, error: "reportId and datasetId are required" });
     }
+    
+    // Get access token for Power BI API
     const accessToken = await getAccessToken();
+    
+    // Get all reports to find embedUrl
+    const reports = await getReportsInWorkspace(accessToken);
+    const report = reports.find((r) => r.id === reportId);
+    
+    if (!report) {
+      return res
+        .status(404)
+        .json({ success: false, error: "Report not found" });
+    }
+    
+    // Generate embed token
     const token = await getEmbedToken(
       accessToken,
       reportId,
@@ -377,11 +771,16 @@ app.post("/api/embed-token", async (req, res) => {
       bypassRLS ? null : userIdentity
     );
 
+    // Return complete embed configuration
     res.json({
       success: true,
-      embedToken: token.token,
+      accessToken: token.token,  // This is the embed token (Power BI calls it accessToken in the SDK)
+      embedToken: token.token,    // Also return as embedToken for backward compatibility
+      embedUrl: report.embedUrl,
+      reportId: report.id,
+      tokenExpiry: token.expiration,
+      expiration: token.expiration,  // Backward compatibility
       tokenId: token.tokenId,
-      expiration: token.expiration,
       rlsBypassed: !!bypassRLS,
     });
   } catch (error) {
@@ -414,11 +813,86 @@ app.post("/api/embed-config/:reportId", async (req, res) => {
       reportName: report.name,
       embedUrl: report.embedUrl,
       embedToken: token.token,
+      accessToken: token.token,  // Also include accessToken
       tokenId: token.tokenId,
       expiration: token.expiration,
+      tokenExpiry: token.expiration,
     });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Debug endpoint to test full embed flow
+app.post("/api/debug-embed", async (req, res) => {
+  try {
+    const { reportId, datasetId, userEmail } = req.body;
+    
+    // Step 1: Get access token
+    const accessToken = await getAccessToken();
+    
+    // Step 2: Get reports
+    const reports = await getReportsInWorkspace(accessToken);
+    
+    // Step 3: Find the specific report
+    const report = reports.find((r) => r.id === reportId);
+    if (!report) {
+      return res.status(404).json({ 
+        success: false, 
+        error: "Report not found",
+        availableReports: reports.map(r => ({ id: r.id, name: r.name }))
+      });
+    }
+    
+    // Step 4: Generate embed token
+    const userIdentity = userEmail ? {
+      username: userEmail,
+      roles: ["Gebruiker"]
+    } : null;
+    
+    const token = await getEmbedToken(
+      accessToken,
+      reportId,
+      datasetId ? [datasetId] : [report.datasetId],
+      userIdentity
+    );
+    
+    // Step 5: Return full config
+    const config = {
+      success: true,
+      embedConfig: {
+        type: 'report',
+        id: report.id,
+        embedUrl: report.embedUrl,
+        accessToken: token.token,
+        tokenType: 'Embed',
+        expiration: token.expiration,
+      },
+      reportDetails: {
+        reportId: report.id,
+        reportName: report.name,
+        datasetId: report.datasetId,
+        webUrl: report.webUrl,
+      },
+      rlsInfo: {
+        enabled: RLS_ENABLED_DATASETS.includes(datasetId || report.datasetId),
+        username: userIdentity?.username || null,
+        roles: userIdentity?.roles || [],
+      },
+      debug: {
+        tokenLength: token.token.length,
+        expiresIn: new Date(token.expiration).toLocaleString(),
+      }
+    };
+    
+    res.json(config);
+    
+  } catch (error) {
+    res.status(500).json({ 
+      success: false, 
+      error: error.message,
+      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+    });
   }
 });
 
@@ -426,9 +900,14 @@ app.post("/api/embed-config/:reportId", async (req, res) => {
 async function startServer() {
   try {
     validateEnvVars();
+    
+    // Initialize CSV file for email storage
+    initializeCsvFile();
+    console.log("📄 CSV email storage initialized");
+    
     // Non-blocking SMTP verify
     verifySMTPConnection().catch(() => {
-      console.warn("⚠️  SMTP verification failed; emails may not send.");
+      // SMTP verification failed
     });
 
     app.listen(PORT, () => {
@@ -438,7 +917,6 @@ async function startServer() {
       console.log(`📧 SMTP Port: ${SMTP_PORT} Secure: ${SMTP_SECURE}`);
     });
   } catch (e) {
-    console.error("❌ Failed to start server:", e.message);
     process.exit(1);
   }
 }
