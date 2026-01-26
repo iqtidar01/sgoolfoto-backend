@@ -498,9 +498,9 @@ app.post("/api/send-otp", async (req, res) => {
 
     await sendEmail({
       to: normalizedEmail,
-      subject: "Uw Verificatie code voor RSPP",
+      subject: "Verificatie code voor SGOOL Fotografie",
       html: `
-        <p>Uw Verificatie code voor het RSPP Dashboard:</p>
+        <p>Uw Verificatie code voor het SGOOL Fotografie Dashboard:</p>
         <h1>${otp}</h1>
         <p>Deze code verloopt over 5 minuten.</p>
       `,
