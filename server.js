@@ -188,9 +188,10 @@ const RLS_ENABLED_DATASETS = [
   "a48db15f-a2b5-41a9-a46d-67991ae69283",
   "1ca5fa8b-d1a9-4ce5-b740-d9f0a148ad62",
   "7a7aa6bd-d65c-4a4c-9859-b9533f3cb974",
+  "ebf09c69-a2eb-4005-8cf5-70c76050212f",
 ];
 
-const RLS_ROLE_NAME = "Gebruiker";
+const RLS_ROLE_NAME = "Fotograaf";
 
 function validateEnvVars() {
   const required = {
@@ -594,8 +595,8 @@ app.post("/api/admin/login", (req, res) => {
     }
 
     // Static admin credentials
-    const ADMIN_EMAIL = "info@rspp.com";
-    const ADMIN_PASSWORD = "info@rspp.com";
+    const ADMIN_EMAIL = "corwin@sgoolfotografie.nl";
+    const ADMIN_PASSWORD = "corwin@sgoolfotografie.nl";
 
     // Normalize email for comparison
     const normalizedEmail = email.toLowerCase().trim();
