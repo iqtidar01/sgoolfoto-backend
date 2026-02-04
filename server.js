@@ -23,11 +23,24 @@ const CSV_FILE_PATH = path.join(__dirname, "emails.csv");
 
 // ---------- CSV Helper Functions ----------
 
+// Parse roles from CSV string (comma-separated). Default to ["Fotograaf"] if empty/missing.
+function parseRoles(rolesStr) {
+  if (!rolesStr || typeof rolesStr !== "string") return ["Fotograaf"];
+  const arr = rolesStr.split(",").map((r) => r.trim()).filter(Boolean);
+  return arr.length > 0 ? arr : ["Fotograaf"];
+}
+
+// Serialize roles array to CSV string
+function serializeRoles(roles) {
+  if (!Array.isArray(roles) || roles.length === 0) return "Fotograaf";
+  return roles.join(",");
+}
+
 // Initialize CSV file if it doesn't exist
 function initializeCsvFile() {
   if (!fs.existsSync(CSV_FILE_PATH)) {
     // Create empty CSV with just headers
-    const headers = "id,email,createdAt,updatedAt\n";
+    const headers = "id,email,roles,createdAt,updatedAt\n";
     fs.writeFileSync(CSV_FILE_PATH, headers);
   }
 }
@@ -48,6 +61,7 @@ async function readEmailsFromCsv() {
         emails.push({
           id: parseInt(row.id),
           email: row.email,
+          roles: parseRoles(row.roles),
           createdAt: row.createdAt,
           updatedAt: row.updatedAt,
         });
@@ -68,13 +82,18 @@ async function writeEmailsToCsv(emails) {
     header: [
       { id: "id", title: "id" },
       { id: "email", title: "email" },
+      { id: "roles", title: "roles" },
       { id: "createdAt", title: "createdAt" },
       { id: "updatedAt", title: "updatedAt" },
     ],
   });
 
   try {
-    await csvWriter.writeRecords(emails);
+    const records = emails.map((e) => ({
+      ...e,
+      roles: serializeRoles(e.roles),
+    }));
+    await csvWriter.writeRecords(records);
     return true;
   } catch (error) {
     throw error;
@@ -557,29 +576,41 @@ app.post("/api/send-otp", async (req, res) => {
   }
 });
 
-app.post("/api/verify-otp", (req, res) => {
-  const { email, otp } = req.body;
-  if (!email || !otp) {
-    return res
-      .status(400)
-      .json({ success: false, error: "Email and OTP are required" });
-  }
-  const normalizedEmail = email.toLowerCase().trim();
-  const record = otpStore[normalizedEmail];
-  if (!record)
-    return res
-      .status(400)
-      .json({ success: false, error: "No OTP found for this email" });
+app.post("/api/verify-otp", async (req, res) => {
+  try {
+    const { email, otp } = req.body;
+    if (!email || !otp) {
+      return res
+        .status(400)
+        .json({ success: false, error: "Email and OTP are required" });
+    }
+    const normalizedEmail = email.toLowerCase().trim();
+    const record = otpStore[normalizedEmail];
+    if (!record)
+      return res
+        .status(400)
+        .json({ success: false, error: "No OTP found for this email" });
 
-  if (Date.now() > record.expiresAt) {
+    if (Date.now() > record.expiresAt) {
+      delete otpStore[normalizedEmail];
+      return res.status(400).json({ success: false, error: "OTP expired" });
+    }
+    if (record.otp !== otp) {
+      return res.status(400).json({ success: false, error: "Invalid OTP" });
+    }
     delete otpStore[normalizedEmail];
-    return res.status(400).json({ success: false, error: "OTP expired" });
+
+    // Get user roles from CSV (admin-assigned)
+    const authorizedEmails = await readEmailsFromCsv();
+    const userRecord = authorizedEmails.find((e) => e.email === normalizedEmail);
+    const roles = userRecord?.roles && userRecord.roles.length > 0
+      ? userRecord.roles
+      : ["Fotograaf"];
+
+    res.json({ success: true, message: "OTP Verified", roles });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
   }
-  if (record.otp !== otp) {
-    return res.status(400).json({ success: false, error: "Invalid OTP" });
-  }
-  delete otpStore[normalizedEmail];
-  res.json({ success: true, message: "OTP Verified" });
 });
 
 app.post("/api/admin/login", (req, res) => {
@@ -636,10 +667,18 @@ function addSerialNumbers(emails) {
   }));
 }
 
+const ALLOWED_ROLES = ["Fotograaf", "HQ"];
+
+function validateRoles(roles) {
+  if (!Array.isArray(roles)) return ["Fotograaf"];
+  const valid = roles.filter((r) => ALLOWED_ROLES.includes(r));
+  return valid.length > 0 ? valid : ["Fotograaf"];
+}
+
 // Create a new email
 app.post("/api/admin/emails", async (req, res) => {
   try {
-    const { email } = req.body;
+    const { email, roles: rolesInput } = req.body;
     
     // Validate required fields
     if (!email) {
@@ -656,6 +695,9 @@ app.post("/api/admin/emails", async (req, res) => {
         error: "Invalid email format" 
       });
     }
+
+    // Roles: default Fotograaf pre-selected, validate against allowed roles
+    const roles = validateRoles(rolesInput);
 
     // Read existing emails from CSV
     const emails = await readEmailsFromCsv();
@@ -674,6 +716,7 @@ app.post("/api/admin/emails", async (req, res) => {
     const newEmail = {
       id: Date.now(),
       email: normalizedEmail,
+      roles,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
     };
@@ -682,14 +725,18 @@ app.post("/api/admin/emails", async (req, res) => {
     emails.push(newEmail);
     await writeEmailsToCsv(emails);
 
-    // Add serial number for response
+    // Add serial number for response - ensure roles is always an array
     const emailsWithSerial = addSerialNumbers(emails);
     const newEmailWithSerial = emailsWithSerial.find(e => e.id === newEmail.id);
+    const responseData = {
+      ...newEmailWithSerial,
+      roles: Array.isArray(newEmailWithSerial?.roles) ? newEmailWithSerial.roles : parseRoles(newEmailWithSerial?.roles),
+    };
 
     return res.status(201).json({ 
       success: true, 
       message: "Email created successfully",
-      data: newEmailWithSerial
+      data: responseData
     });
   } catch (err) {
     return res.status(500).json({ 
@@ -767,7 +814,7 @@ app.get("/api/admin/emails/:id", async (req, res) => {
 app.put("/api/admin/emails/:id", async (req, res) => {
   try {
     const { id } = req.params;
-    const { email } = req.body;
+    const { email, roles: rolesInput } = req.body;
     const emailId = parseInt(id);
 
     if (isNaN(emailId)) {
@@ -818,21 +865,28 @@ app.put("/api/admin/emails/:id", async (req, res) => {
       });
     }
 
-    // Update email
+    // Update email and roles (if provided)
     emails[emailIndex].email = normalizedEmail;
+    if (rolesInput !== undefined && rolesInput !== null) {
+      emails[emailIndex].roles = validateRoles(rolesInput);
+    }
     emails[emailIndex].updatedAt = new Date().toISOString();
 
     // Write updated emails to CSV
     await writeEmailsToCsv(emails);
 
-    // Add serial numbers for response
+    // Add serial numbers for response - ensure roles is always an array
     const emailsWithSerial = addSerialNumbers(emails);
     const updatedEmail = emailsWithSerial.find(e => e.id === emailId);
+    const responseData = {
+      ...updatedEmail,
+      roles: Array.isArray(updatedEmail?.roles) ? updatedEmail.roles : parseRoles(updatedEmail?.roles),
+    };
 
     return res.json({ 
       success: true, 
       message: "Email updated successfully",
-      data: updatedEmail
+      data: responseData
     });
   } catch (err) {
     return res.status(500).json({ 
@@ -1156,6 +1210,17 @@ async function startServer() {
     // Initialize CSV file for email storage
     initializeCsvFile();
     console.log("📄 CSV email storage initialized");
+
+    // Migrate CSV to include roles column if needed (for existing data)
+    try {
+      const emails = await readEmailsFromCsv();
+      if (emails.length > 0) {
+        await writeEmailsToCsv(emails);
+        console.log("📄 CSV migrated to include roles column");
+      }
+    } catch (migrateErr) {
+      console.warn("⚠️ CSV migration skipped:", migrateErr.message);
+    }
     
     // Non-blocking SMTP verify with detailed logging
     if (SMTP_HOST && SMTP_EMAIL && SMTP_PASSWORD) {
