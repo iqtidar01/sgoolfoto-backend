@@ -274,6 +274,25 @@ async function getReportsInWorkspace(accessToken) {
   }
 }
 
+async function getReportById(accessToken, reportId) {
+  const url = `https://api.powerbi.com/v1.0/myorg/reports/${reportId}`;
+  try {
+    const response = await axios.get(url, {
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+    return response.data;
+  } catch (error) {
+    throw new Error(
+      `Failed to fetch report: ${
+        error.response?.data?.error?.message || error.message
+      }`
+    );
+  }
+}
+
 async function getEmbedToken(
   accessToken,
   reportId,
@@ -944,14 +963,28 @@ app.delete("/api/admin/emails/:id", async (req, res) => {
 
 app.post("/api/reports", async (req, res) => {
   try {
-    const { userIdentity } = req.body;
+    const { userIdentity, reportId: requestedReportId } = req.body;
     if (!userIdentity || !userIdentity.email) {
       return res
         .status(400)
         .json({ success: false, error: "User identity is required" });
     }
     const accessToken = await getAccessToken();
-    const allReports = await getReportsInWorkspace(accessToken);
+
+    let allReports;
+    if (requestedReportId) {
+      try {
+        const report = await getReportById(accessToken, requestedReportId);
+        allReports = [report];
+      } catch (e) {
+        return res
+          .status(404)
+          .json({ success: false, error: "Report not found" });
+      }
+    } else {
+      allReports = await getReportsInWorkspace(accessToken);
+    }
+
     const filteredReports = filterReportsByUser(allReports, userIdentity);
 
     res.json({
