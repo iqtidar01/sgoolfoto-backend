@@ -275,7 +275,7 @@ async function getReportsInWorkspace(accessToken) {
 }
 
 async function getReportById(accessToken, reportId) {
-  const url = `https://api.powerbi.com/v1.0/myorg/reports/${reportId}`;
+  const url = `https://api.powerbi.com/v1.0/myorg/groups/${PBI_WORKSPACE_ID}/reports/${reportId}`;
   try {
     const response = await axios.get(url, {
       headers: {
